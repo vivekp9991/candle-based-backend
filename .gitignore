@@ -1,1 +1,11 @@
 node_modules/
+
+package-lock.json
+
+.env
+
+logs/
+*.log
+.DS_Store
+dist/
+build/
