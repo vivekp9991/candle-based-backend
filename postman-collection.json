@@ -1,0 +1,269 @@
+{
+  "info": {
+    "name": "Candle Analytics API",
+    "description": "Test collection for the candle-based backtesting API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Checks",
+      "item": [
+        {
+          "name": "API Gateway Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Backtesting Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3001/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3001",
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Market Data Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3002/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3002",
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Backtesting",
+      "item": [
+        {
+          "name": "Full Period Backtest (HYLD.TO)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticker\": \"HYLD.TO\",\n  \"timeframe\": \"1D\",\n  \"quantity\": 1,\n  \"startDate\": \"2022-06-01\",\n  \"endDate\": \"2025-07-26\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/backtest",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "backtest"]
+            }
+          }
+        },
+        {
+          "name": "2024 Only Backtest",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticker\": \"HYLD.TO\",\n  \"timeframe\": \"1D\",\n  \"quantity\": 2,\n  \"startDate\": \"2024-01-01\",\n  \"endDate\": \"2024-12-31\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/backtest",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "backtest"]
+            }
+          }
+        },
+        {
+          "name": "Short Period Test (1 Month)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticker\": \"HYLD.TO\",\n  \"timeframe\": \"1D\",\n  \"quantity\": 1,\n  \"startDate\": \"2024-06-01\",\n  \"endDate\": \"2024-06-30\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/backtest",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "backtest"]
+            }
+          }
+        },
+        {
+          "name": "Multiple Shares Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticker\": \"HYLD.TO\",\n  \"timeframe\": \"1D\",\n  \"quantity\": 10,\n  \"startDate\": \"2023-01-01\",\n  \"endDate\": \"2023-12-31\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/backtest",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "backtest"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Direct Service Calls",
+      "item": [
+        {
+          "name": "Get Market Data",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/candles?ticker=HYLD.TO&startDate=2024-01-01&endDate=2024-01-31&timeframe=1D",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "candles"],
+              "query": [
+                {
+                  "key": "ticker",
+                  "value": "HYLD.TO"
+                },
+                {
+                  "key": "startDate",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "endDate",
+                  "value": "2024-01-31"
+                },
+                {
+                  "key": "timeframe",
+                  "value": "1D"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Dividends",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/dividends?ticker=HYLD.TO&startDate=2024-01-01&endDate=2024-12-31",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "dividends"],
+              "query": [
+                {
+                  "key": "ticker",
+                  "value": "HYLD.TO"
+                },
+                {
+                  "key": "startDate",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "endDate",
+                  "value": "2024-12-31"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error Testing",
+      "item": [
+        {
+          "name": "Invalid Ticker",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticker\": \"INVALID123\",\n  \"timeframe\": \"1D\",\n  \"quantity\": 1,\n  \"startDate\": \"2024-01-01\",\n  \"endDate\": \"2024-01-31\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/backtest",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "backtest"]
+            }
+          }
+        },
+        {
+          "name": "Missing Required Fields",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticker\": \"HYLD.TO\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/backtest",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "backtest"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

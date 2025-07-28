@@ -5,6 +5,7 @@ const { v4: uuid } = require('uuid');
 const config = require('../../../config/config');
 const Candle = require('../../../shared/models/Candle');
 const Dividend = require('../../../shared/models/Dividend');
+const SmartDividendFrequencyService = require('../../dividend-service/utils/smartFrequencyService');
 const { resampleCandles } = require('../utils/resampleUtils');
 
 const marketUrl = config.services.marketData.url;
@@ -42,11 +43,25 @@ async function getDividends(ticker, startDate, endDate) {
   return dividends;
 }
 
+// Helper function to convert frequency to payments per year
+function getPaymentsPerYear(frequency) {
+  switch (frequency) {
+    case 'monthly': return 12;
+    case 'quarterly': return 4;
+    case 'semi-annual': return 2;
+    case 'annual': return 1;
+    case 'irregular': return 4; // Default to quarterly for calculations
+    default: return 4;
+  }
+}
+
 async function runBacktest(req, res) {
   const { ticker, timeframe, quantity, startDate, endDate } = req.body;
   const start = startDate ? moment(startDate).toDate() : moment().subtract(5, 'years').toDate();
   const end = endDate ? moment(endDate).toDate() : moment().toDate();
   const sessionId = uuid();
+
+  console.log(`🚀 Starting backtest for ${ticker} from ${startDate} to ${endDate}`);
 
   const dailyCandles = await getDailyCandles(ticker, start, end);
 
@@ -76,6 +91,15 @@ async function runBacktest(req, res) {
 
   const dividends = await getDividends(ticker, start, end);
 
+  // Get dividend frequency using smart analysis (analyzes 2+ years of data)
+  console.log(`🔍 Analyzing dividend frequency for ${ticker}...`);
+  const frequencyAnalysis = await SmartDividendFrequencyService.analyzeDividendFrequency(ticker, startDate, endDate);
+  const dividendFrequency = frequencyAnalysis.frequency;
+  const paymentsPerYear = getPaymentsPerYear(dividendFrequency);
+
+  console.log(`🎯 Dividend frequency: ${dividendFrequency} (confidence: ${frequencyAnalysis.confidence})`);
+  console.log(`📊 Payments per year: ${paymentsPerYear}`);
+
   // Calculations
   const totalShares = transactions.length * quantity;
   const totalInvestment = _.sumBy(transactions, 'totalCost');
@@ -97,7 +121,6 @@ async function runBacktest(req, res) {
     const dividendIncome = cumShares * div.amount;
     totalDividend += dividendIncome;
 
-    // Group by year
     const year = moment(div.exDate).year();
     if (!yearlyDividendMap[year]) {
       yearlyDividendMap[year] = 0;
@@ -106,7 +129,7 @@ async function runBacktest(req, res) {
   }
   const pnLWithDividend = pnL + totalDividend;
 
-  // Generate years from start to end, even if 0
+  // Generate years from start to end
   const years = [];
   for (let y = moment(start).year(); y <= moment(end).year(); y++) {
     years.push(y);
@@ -116,32 +139,7 @@ async function runBacktest(req, res) {
     totalDividend: yearlyDividendMap[year] || 0
   }));
 
-  // Infer dividend frequency
-  let dividendFrequency = 'quarterly';
-  let paymentsPerYear = 4;
-  if (dividends.length >= 2) {
-    const sortedDivs = _.sortBy(dividends, 'exDate');
-    let totalDays = 0;
-    for (let i = 1; i < sortedDivs.length; i++) {
-      totalDays += (sortedDivs[i].exDate - sortedDivs[i - 1].exDate) / (1000 * 60 * 60 * 24);
-    }
-    const avgDays = totalDays / (sortedDivs.length - 1);
-    if (avgDays < 45) {
-      dividendFrequency = 'monthly';
-      paymentsPerYear = 12;
-    } else if (avgDays < 135) {
-      dividendFrequency = 'quarterly';
-      paymentsPerYear = 4;
-    } else if (avgDays < 225) {
-      dividendFrequency = 'semi-annual';
-      paymentsPerYear = 2;
-    } else {
-      dividendFrequency = 'annual';
-      paymentsPerYear = 1;
-    }
-  }
-
-  // Dividend yields
+  // Dividend yields using smart-detected frequency
   let lastDividendYield = 0;
   let ttmDividendYield = 0;
   let yieldOnCost = 0;
@@ -164,47 +162,8 @@ async function runBacktest(req, res) {
   const pnLWithDividendPercent = (pnLWithDividend / totalInvestment) * 100 || 0;
   const averageCost = totalInvestment / totalShares || 0;
 
-  // Updated dividendHistory for monthly-only data
-  const dividendHistory = [];
-  const dividendGroups = _.groupBy(dividends, div => moment(div.exDate).year());
-  const currentDate = moment(); // Use current date
-  const startYear = moment(start).year();
-  const endYear = moment(end).year();
-
-  for (let y = startYear; y <= endYear; y++) {
-    const yearDivs = dividendGroups[y] || [];
-    
-    // Force monthly for current data
-    const yearFrequency = 'monthly';
-    const periodsPerYear = 12;
-    const labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    
-    let totalAmount = 0;
-    const payments = [];
-    const monthGroups = _.groupBy(yearDivs, div => moment(div.exDate).month() + 1);
-    const lastKnownAmount = dividends.length > 0 ? _.meanBy(dividends, 'amount') : 0;
-
-    for (let m = 1; m <= 12; m++) {
-      const monthDivs = monthGroups[m] || [];
-      let amount = _.sumBy(monthDivs, 'amount');
-      let status = 'paid';
-      
-      if (y > currentDate.year() || (y === currentDate.year() && m > currentDate.month() + 1)) {
-        status = 'pending';
-        amount = 0;
-      } else if (y === currentDate.year() && m === currentDate.month() + 1) {
-        status = 'upcoming';
-        amount = lastKnownAmount; // Estimate
-      } else if (amount === 0 && y <= currentDate.year()) {
-        amount = lastKnownAmount; // Fill past missing with average
-      }
-      
-      totalAmount += amount;
-      payments.push({ period: m, amount, status, label: labels[m - 1] });
-    }
-
-    dividendHistory.push({ year: y, frequency: yearFrequency, totalAmount, payments });
-  }
+  // Generate dividend history using smart-detected frequency
+  const dividendHistory = generateDividendHistory(dividendFrequency, dividends, start, end);
 
   res.json({
     pnL,
@@ -216,7 +175,9 @@ async function runBacktest(req, res) {
     lastDividendYield,
     ttmDividendYield,
     yieldOnCost,
-    dividendFrequency,
+    dividendFrequency, // Smart-detected frequency
+    dividendFrequencyConfidence: frequencyAnalysis.confidence,
+    dividendFrequencyReason: frequencyAnalysis.reason,
     totalShares,
     totalInvestment,
     totalValueToday,
@@ -224,6 +185,122 @@ async function runBacktest(req, res) {
     yearlyDividends,
     dividendHistory
   });
+}
+
+function generateDividendHistory(frequency, dividends, startDate, endDate) {
+  const dividendHistory = [];
+  const dividendGroups = _.groupBy(dividends, div => moment(div.exDate).year());
+  const currentDate = moment();
+  const startYear = moment(startDate).year();
+  const endYear = moment(endDate).year();
+
+  for (let y = startYear; y <= endYear; y++) {
+    const yearDivs = dividendGroups[y] || [];
+    
+    let labels, totalAmount = 0, payments = [];
+    
+    if (frequency === 'monthly') {
+      labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthGroups = _.groupBy(yearDivs, div => moment(div.exDate).month() + 1);
+      const lastKnownAmount = dividends.length > 0 ? _.meanBy(dividends, 'amount') : 0;
+
+      for (let m = 1; m <= 12; m++) {
+        const monthDivs = monthGroups[m] || [];
+        let amount = _.sumBy(monthDivs, 'amount');
+        let status = 'paid';
+        
+        if (y > currentDate.year() || (y === currentDate.year() && m > currentDate.month() + 1)) {
+          status = 'pending';
+          amount = 0;
+        } else if (y === currentDate.year() && m === currentDate.month() + 1) {
+          status = 'upcoming';
+          if (amount === 0) amount = lastKnownAmount; // Estimate for upcoming
+        } else if (amount === 0 && y < currentDate.year()) {
+          // Don't fill historical missing payments with estimates
+          amount = 0;
+        }
+        
+        totalAmount += amount;
+        payments.push({ period: m, amount, status, label: labels[m - 1] });
+      }
+    } else if (frequency === 'quarterly') {
+      labels = ['Q1', 'Q2', 'Q3', 'Q4'];
+      const quarterGroups = _.groupBy(yearDivs, div => Math.floor(moment(div.exDate).month() / 3) + 1);
+      
+      for (let q = 1; q <= 4; q++) {
+        const quarterDivs = quarterGroups[q] || [];
+        let amount = _.sumBy(quarterDivs, 'amount');
+        let status = 'paid';
+        
+        const currentQuarter = Math.floor(currentDate.month() / 3) + 1;
+        if (y > currentDate.year() || (y === currentDate.year() && q > currentQuarter)) {
+          status = 'pending';
+          amount = 0;
+        } else if (y === currentDate.year() && q === currentQuarter && amount === 0) {
+          status = 'upcoming';
+          amount = 0; // Don't estimate
+        }
+        
+        totalAmount += amount;
+        payments.push({ period: q, amount, status, label: labels[q - 1] });
+      }
+    } else if (frequency === 'semi-annual') {
+      labels = ['H1', 'H2'];
+      const halfGroups = _.groupBy(yearDivs, div => moment(div.exDate).month() < 6 ? 1 : 2);
+      
+      for (let h = 1; h <= 2; h++) {
+        const halfDivs = halfGroups[h] || [];
+        let amount = _.sumBy(halfDivs, 'amount');
+        let status = 'paid';
+        
+        const currentHalf = currentDate.month() < 6 ? 1 : 2;
+        if (y > currentDate.year() || (y === currentDate.year() && h > currentHalf)) {
+          status = 'pending';
+          amount = 0;
+        } else if (y === currentDate.year() && h === currentHalf && amount === 0) {
+          status = 'upcoming';
+        }
+        
+        totalAmount += amount;
+        payments.push({ period: h, amount, status, label: labels[h - 1] });
+      }
+    } else if (frequency === 'annual') {
+      const amount = _.sumBy(yearDivs, 'amount');
+      let status = 'paid';
+      
+      if (y > currentDate.year()) {
+        status = 'pending';
+      } else if (y === currentDate.year() && amount === 0) {
+        status = 'upcoming';
+      }
+      
+      totalAmount = amount;
+      payments.push({ period: 1, amount, status, label: 'Annual' });
+    } else if (frequency === 'irregular') {
+      // For irregular dividends, just show actual payments
+      yearDivs.forEach((div, index) => {
+        const amount = div.amount;
+        const status = moment(div.exDate).isBefore(currentDate) ? 'paid' : 'upcoming';
+        totalAmount += amount;
+        payments.push({ 
+          period: index + 1, 
+          amount, 
+          status, 
+          label: moment(div.exDate).format('MMM'),
+          exDate: moment(div.exDate).format('YYYY-MM-DD')
+        });
+      });
+    }
+
+    dividendHistory.push({ 
+      year: y, 
+      frequency: frequency, 
+      totalAmount: parseFloat(totalAmount.toFixed(2)), 
+      payments 
+    });
+  }
+
+  return dividendHistory;
 }
 
 module.exports = { runBacktest };

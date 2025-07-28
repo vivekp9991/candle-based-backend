@@ -10,7 +10,13 @@
     "dev:market": "nodemon services/market-data-service/server.js",
     "dev:dividend": "nodemon services/dividend-service/server.js",
     "dev:transaction": "nodemon services/transaction-service/server.js",
-    "setup-db": "node scripts/setup-database.js"
+    "setup-db": "node scripts/setup-database.js",
+    "test": "node test-services.js",
+    "test:health": "node -e \"require('./test-services').testServiceHealth()\"",
+    "test:start": "node scripts/start-and-test.js",
+    "test:backtest": "node -e \"const axios = require('axios'); axios.post('http://localhost:3000/api/v1/backtest', {ticker: 'HYLD.TO', timeframe: '1D', quantity: 1, startDate: '2024-01-01', endDate: '2024-12-31'}).then(r => console.log('✅ Success:', r.data)).catch(e => console.error('❌ Error:', e.response?.data || e.message))\"",
+    "quick-test": "curl -X POST http://localhost:3000/api/v1/backtest -H 'Content-Type: application/json' -d '{\"ticker\":\"HYLD.TO\",\"timeframe\":\"1D\",\"quantity\":1,\"startDate\":\"2024-01-01\",\"endDate\":\"2024-12-31\"}'",
+    "check-services": "node -e \"const services = ['3000', '3001', '3002', '3003', '3004']; const axios = require('axios'); Promise.all(services.map(port => axios.get('http://localhost:' + port + '/health').then(() => console.log('✅ Port ' + port + ' OK')).catch(() => console.log('❌ Port ' + port + ' DOWN'))))\""
   },
   "keywords": [],
   "author": "",
