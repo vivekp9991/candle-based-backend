@@ -5,6 +5,41 @@ const config = require('../../../config/config');
 
 const { baseURL, key } = config.externalAPIs.twelveData;
 
+// Function to transform ticker for Twelve Data API (Enhanced with NSE/BSE support)
+function transformTicker(ticker) {
+  // Ensure ticker is uppercase and a string
+  const tickerUpper = String(ticker).toUpperCase();
+
+  // Initialize API parameters with the original ticker
+  let apiParams = { symbol: tickerUpper };
+
+  // Handle TSX tickers (e.g., SHOP.TO)
+  if (tickerUpper.endsWith('.TO')) {
+    apiParams.symbol = tickerUpper.replace('.TO', '');
+    apiParams.exchange = 'TSX';
+    console.log(`🇨🇦 TSX ticker detected: ${ticker} -> symbol: ${apiParams.symbol}, exchange: ${apiParams.exchange}`);
+  } 
+  // Handle Indian tickers (e.g., NIFTY.IN or BSE:RELIANCE.IN)
+  else if (tickerUpper.endsWith('.IN')) {
+    apiParams.symbol = tickerUpper.replace('.IN', '');
+    
+    // Check for BSE prefix to differentiate BSE from NSE
+    if (tickerUpper.startsWith('BSE:')) {
+      apiParams.symbol = apiParams.symbol.replace('BSE:', '');
+      apiParams.exchange = 'BSE';
+      console.log(`🇮🇳 BSE ticker detected: ${ticker} -> symbol: ${apiParams.symbol}, exchange: ${apiParams.exchange}`);
+    } else {
+      apiParams.exchange = 'NSE';
+      console.log(`🇮🇳 NSE ticker detected: ${ticker} -> symbol: ${apiParams.symbol}, exchange: ${apiParams.exchange}`);
+    }
+  } else {
+    // Default case - assume US market if no specific exchange suffix
+    console.log(`🇺🇸 Default/US ticker: ${ticker} -> symbol: ${apiParams.symbol}`);
+  }
+
+  return apiParams;
+}
+
 async function getCandles(req, res) {
   let { ticker, startDate, endDate, timeframe } = req.query;
   ticker = ticker.toUpperCase();
@@ -12,15 +47,25 @@ async function getCandles(req, res) {
 
   console.log(`🔍 Market Data Request: ${ticker} from ${startDate} to ${endDate} (${timeframe})`);
 
+  // Detect exchange from ticker format
+  let exchangeInfo = 'US Market (Default)';
+  if (ticker.endsWith('.TO')) {
+    exchangeInfo = '🇨🇦 TSX (Toronto Stock Exchange)';
+  } else if (ticker.endsWith('.IN')) {
+    if (ticker.startsWith('BSE:')) {
+      exchangeInfo = '🇮🇳 BSE (Bombay Stock Exchange)';
+    } else {
+      exchangeInfo = '🇮🇳 NSE (National Stock Exchange of India)';
+    }
+  }
+
+  console.log(`🌍 Exchange detected: ${exchangeInfo}`);
+
   // Always fetch daily data from TwelveData, then resample if needed
   const apiInterval = '1day';
 
-  // Transform symbol for Twelve Data API
-  let apiParams = { symbol: ticker };
-  if (ticker.endsWith('.TO')) {
-    apiParams.symbol = ticker.replace('.TO', '');
-    apiParams.exchange = 'TSX';
-  }
+  // Use the enhanced transformTicker function
+  const apiParams = transformTicker(ticker);
 
   // Check database first
   let candles = await Candle.find({
@@ -34,10 +79,19 @@ async function getCandles(req, res) {
   if (candles.length > 0) {
     // Check if we have sufficient data (at least 80% of expected trading days)
     const daysDiff = moment(endDate).diff(moment(startDate), 'days');
-    const expectedTradingDays = Math.floor(daysDiff * 0.7); // ~70% of days are trading days
+    
+    // Adjust expected trading days based on exchange
+    let tradingDayRatio = 0.7; // Default for US/Canadian markets
+    if (ticker.endsWith('.IN')) {
+      // Indian markets typically have different trading patterns
+      tradingDayRatio = 0.65; // Account for different holidays
+    }
+    
+    const expectedTradingDays = Math.floor(daysDiff * tradingDayRatio);
     const dataCompleteness = candles.length / expectedTradingDays;
     
     console.log(`📊 Data completeness: ${candles.length}/${expectedTradingDays} = ${(dataCompleteness * 100).toFixed(1)}%`);
+    console.log(`📈 Trading day ratio used: ${(tradingDayRatio * 100).toFixed(1)}% for ${exchangeInfo}`);
     
     if (dataCompleteness >= 0.8) {
       console.log(`✅ Using cached data (sufficient coverage)`);
@@ -48,7 +102,7 @@ async function getCandles(req, res) {
   }
 
   // Fetch from TwelveData API
-  console.log(`🌐 Fetching from TwelveData API...`);
+  console.log(`🌐 Fetching from TwelveData API for ${exchangeInfo}...`);
   
   const params = {
     ...apiParams,
@@ -75,7 +129,7 @@ async function getCandles(req, res) {
     });
 
     if (response.data.status !== 'ok') {
-      console.error('❌ API returned non-ok status:', response.data);
+      console.error(`❌ API returned non-ok status for ${exchangeInfo}:`, response.data);
       
       // If API fails but we have some cached data, use it
       if (candles.length > 0) {
@@ -87,13 +141,21 @@ async function getCandles(req, res) {
     }
 
     if (!response.data.values || response.data.values.length === 0) {
-      console.error('❌ No values returned from API');
+      console.error(`❌ No values returned from API for ${exchangeInfo}`);
+      
+      // Check if it's an unsupported ticker format and provide helpful message
+      if (ticker.endsWith('.IN')) {
+        console.log(`💡 Tip: For Indian stocks, try formats like:`);
+        console.log(`   - NSE: RELIANCE.IN, TCS.IN, INFY.IN`);
+        console.log(`   - BSE: BSE:RELIANCE.IN, BSE:TCS.IN`);
+      }
+      
       return res.json(candles); // Return cached data if available
     }
 
     // Process API response
     const values = response.data.values;
-    console.log(`📈 Processing ${values.length} candles from API...`);
+    console.log(`📈 Processing ${values.length} candles from ${exchangeInfo}...`);
 
     // TwelveData returns newest first, we need oldest first
     const sortedValues = values.reverse();
@@ -112,7 +174,7 @@ async function getCandles(req, res) {
       
       // Log first few candles for debugging
       if (index < 3) {
-        console.log(`📊 Sample candle ${index + 1}:`, {
+        console.log(`📊 Sample candle ${index + 1} (${exchangeInfo}):`, {
           date: moment(candle.date).format('YYYY-MM-DD'),
           open: candle.open,
           close: candle.close,
@@ -140,7 +202,7 @@ async function getCandles(req, res) {
 
     if (bulkOps.length > 0) {
       const bulkResult = await Candle.bulkWrite(bulkOps);
-      console.log(`✅ Bulk write result:`, {
+      console.log(`✅ Bulk write result for ${exchangeInfo}:`, {
         inserted: bulkResult.upsertedCount,
         modified: bulkResult.modifiedCount,
         matched: bulkResult.matchedCount
@@ -154,26 +216,36 @@ async function getCandles(req, res) {
       date: { $gte: new Date(startDate), $lte: new Date(endDate) }
     }).sort({ date: 1 });
 
-    console.log(`📊 Final result: ${candles.length} daily candles`);
+    console.log(`📊 Final result: ${candles.length} daily candles from ${exchangeInfo}`);
     console.log(`📅 Date range: ${moment(candles[0]?.date).format('YYYY-MM-DD')} to ${moment(candles[candles.length - 1]?.date).format('YYYY-MM-DD')}`);
 
     res.json(candles);
 
   } catch (error) {
-    console.error('❌ TwelveData API Error:', {
+    console.error(`❌ TwelveData API Error for ${exchangeInfo}:`, {
       message: error.message,
       status: error.response?.status,
       data: error.response?.data
     });
 
+    // Provide exchange-specific error guidance
+    if (error.response?.status === 400 && ticker.endsWith('.IN')) {
+      console.log(`💡 Indian stock API error. Please verify ticker format:`);
+      console.log(`   - Correct NSE format: RELIANCE.IN (not RELIANCE.NS)`);
+      console.log(`   - Correct BSE format: BSE:RELIANCE.IN`);
+    } else if (error.response?.status === 400 && ticker.endsWith('.TO')) {
+      console.log(`💡 TSX stock API error. Please verify ticker format:`);
+      console.log(`   - Correct TSX format: SHOP.TO (Toronto Stock Exchange)`);
+    }
+
     // If API fails but we have cached data, use it
     if (candles.length > 0) {
-      console.log(`🔄 API failed, using ${candles.length} cached candles`);
+      console.log(`🔄 API failed, using ${candles.length} cached candles from ${exchangeInfo}`);
       return res.json(candles);
     }
 
     // Return empty array rather than throwing
-    console.log(`💥 No data available, returning empty array`);
+    console.log(`💥 No data available for ${exchangeInfo}, returning empty array`);
     res.json([]);
   }
 }

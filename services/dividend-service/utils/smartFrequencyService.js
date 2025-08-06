@@ -7,8 +7,58 @@ const { baseURL, key } = config.externalAPIs.twelveData;
 
 class SmartDividendFrequencyService {
   
+  // Function to transform ticker for Twelve Data API (Enhanced with NSE/BSE support)
+  static transformTicker(ticker) {
+    // Ensure ticker is uppercase and a string
+    const tickerUpper = String(ticker).toUpperCase();
+
+    // Initialize API parameters with the original ticker
+    let apiParams = { symbol: tickerUpper };
+
+    // Handle TSX tickers (e.g., SHOP.TO)
+    if (tickerUpper.endsWith('.TO')) {
+      apiParams.symbol = tickerUpper.replace('.TO', '');
+      apiParams.exchange = 'TSX';
+      console.log(`🇨🇦 TSX ticker detected: ${ticker} -> symbol: ${apiParams.symbol}, exchange: ${apiParams.exchange}`);
+    } 
+    // Handle Indian tickers (e.g., NIFTY.IN or BSE:RELIANCE.IN)
+    else if (tickerUpper.endsWith('.IN')) {
+      apiParams.symbol = tickerUpper.replace('.IN', '');
+      
+      // Check for BSE prefix to differentiate BSE from NSE
+      if (tickerUpper.startsWith('BSE:')) {
+        apiParams.symbol = apiParams.symbol.replace('BSE:', '');
+        apiParams.exchange = 'BSE';
+        console.log(`🇮🇳 BSE ticker detected: ${ticker} -> symbol: ${apiParams.symbol}, exchange: ${apiParams.exchange}`);
+      } else {
+        apiParams.exchange = 'NSE';
+        console.log(`🇮🇳 NSE ticker detected: ${ticker} -> symbol: ${apiParams.symbol}, exchange: ${apiParams.exchange}`);
+      }
+    } else {
+      // Default case - assume US market if no specific exchange suffix
+      console.log(`🇺🇸 Default/US ticker: ${ticker} -> symbol: ${apiParams.symbol}`);
+    }
+
+    return apiParams;
+  }
+
+  static getExchangeInfo(ticker) {
+    const tickerUpper = ticker.toUpperCase();
+    if (tickerUpper.endsWith('.TO')) {
+      return '🇨🇦 TSX (Toronto Stock Exchange)';
+    } else if (tickerUpper.endsWith('.IN')) {
+      if (tickerUpper.startsWith('BSE:')) {
+        return '🇮🇳 BSE (Bombay Stock Exchange)';
+      } else {
+        return '🇮🇳 NSE (National Stock Exchange of India)';
+      }
+    }
+    return '🇺🇸 US Market (Default)';
+  }
+  
   static async getDividendFrequency(ticker, userStartDate, userEndDate) {
-    console.log(`🔍 Analyzing dividend frequency for ${ticker}...`);
+    const exchangeInfo = this.getExchangeInfo(ticker);
+    console.log(`🔍 Analyzing dividend frequency for ${ticker} on ${exchangeInfo}...`);
     
     // Always fetch 2+ years of data to determine frequency accurately
     const endDate = moment().format('YYYY-MM-DD');
@@ -19,29 +69,41 @@ class SmartDividendFrequencyService {
     const dividends = await this.fetchDividends(ticker, startDate, endDate);
     
     if (!dividends || dividends.length === 0) {
-      console.log('⚠️ No dividend data found, defaulting to quarterly');
+      console.log(`⚠️ No dividend data found for ${exchangeInfo}, defaulting to quarterly`);
+      
+      // Provide exchange-specific default frequency guidance
+      let defaultFrequency = 'quarterly';
+      let defaultReason = 'No dividend data available';
+      
+      if (ticker.toUpperCase().endsWith('.IN')) {
+        defaultFrequency = 'annual'; // Many Indian companies pay annual dividends
+        defaultReason = 'No dividend data available - Indian companies often pay annual dividends';
+      } else if (ticker.toUpperCase().endsWith('.TO')) {
+        defaultFrequency = 'quarterly'; // Canadian companies typically pay quarterly
+        defaultReason = 'No dividend data available - Canadian companies typically pay quarterly dividends';
+      }
+      
       return {
-        frequency: 'quarterly',
+        frequency: defaultFrequency,
         confidence: 'low',
-        reason: 'No dividend data available',
-        dataPoints: 0
+        reason: defaultReason,
+        dataPoints: 0,
+        exchange: exchangeInfo
       };
     }
     
-    console.log(`📊 Found ${dividends.length} dividend payments for analysis`);
+    console.log(`📊 Found ${dividends.length} dividend payments for ${exchangeInfo} analysis`);
     
-    return this.analyzeFrequency(dividends);
+    const analysis = this.analyzeFrequency(dividends);
+    analysis.exchange = exchangeInfo;
+    return analysis;
   }
   
   static async fetchDividends(ticker, startDate, endDate) {
-    let tickerUpper = ticker.toUpperCase();
+    const exchangeInfo = this.getExchangeInfo(ticker);
     
-    // Transform symbol for Twelve Data
-    let apiParams = { symbol: tickerUpper };
-    if (tickerUpper.endsWith('.TO')) {
-      apiParams.symbol = tickerUpper.replace('.TO', '');
-      apiParams.exchange = 'TSX';
-    }
+    // Use the enhanced transformTicker function
+    const apiParams = this.transformTicker(ticker);
 
     const params = {
       ...apiParams,
@@ -50,12 +112,27 @@ class SmartDividendFrequencyService {
       apikey: key
     };
 
+    console.log(`📡 Frequency Analysis API params for ${exchangeInfo}:`, params);
+
     try {
       const response = await axios.get(`${baseURL}/dividends`, { params });
-      console.log(`📈 Dividends API Response for ${ticker}:`, response.data);
+      console.log(`📈 Dividends API Response for ${ticker} (${exchangeInfo}):`, response.data);
 
       if (response.data.status === 'error') {
-        console.error('❌ Dividends API error:', response.data);
+        console.error(`❌ Dividends API error for ${exchangeInfo}:`, response.data);
+        
+        // Provide exchange-specific error guidance
+        if (ticker.toUpperCase().endsWith('.IN')) {
+          console.log(`💡 Indian dividend data note for frequency analysis:`);
+          console.log(`   - Indian companies may have limited dividend history in API`);
+          console.log(`   - Annual dividend patterns are common in India`);
+          console.log(`   - Try both NSE and BSE formats for better data coverage`);
+        } else if (ticker.toUpperCase().endsWith('.TO')) {
+          console.log(`💡 Canadian dividend data note for frequency analysis:`);
+          console.log(`   - TSX companies typically have good dividend history`);
+          console.log(`   - Monthly distributions common for REITs and income trusts`);
+        }
+        
         return [];
       }
 
@@ -70,11 +147,33 @@ class SmartDividendFrequencyService {
         .filter(d => d.exDate && d.amount > 0)
         .sort((a, b) => new Date(b.exDate) - new Date(a.exDate)); // Sort newest first
       
-      console.log(`✅ Processed ${dividends.length} valid dividend records`);
+      console.log(`✅ Processed ${dividends.length} valid dividend records for ${exchangeInfo}`);
+      
+      // Log sample dividends for debugging
+      if (dividends.length > 0) {
+        console.log(`💰 Sample dividends from ${exchangeInfo}:`);
+        dividends.slice(0, 3).forEach((div, index) => {
+          console.log(`   ${index + 1}. ${moment(div.exDate).format('YYYY-MM-DD')}: $${div.amount.toFixed(4)}`);
+        });
+      }
+      
       return dividends;
       
     } catch (error) {
-      console.error('❌ Error fetching dividends:', error.message);
+      console.error(`❌ Error fetching dividends for ${exchangeInfo}:`, error.message);
+      
+      // Provide exchange-specific error recovery guidance
+      if (error.response?.status === 400 && ticker.toUpperCase().endsWith('.IN')) {
+        console.log(`💡 Indian ticker frequency analysis error guidance:`);
+        console.log(`   - Verify ticker format: RELIANCE.IN (NSE) or BSE:RELIANCE.IN (BSE)`);
+        console.log(`   - Some Indian stocks may have limited API coverage`);
+        console.log(`   - Consider manual verification on exchange websites`);
+      } else if (error.response?.status === 400 && ticker.toUpperCase().endsWith('.TO')) {
+        console.log(`💡 TSX ticker frequency analysis error guidance:`);
+        console.log(`   - Verify ticker format: RY.TO (correct) vs RY.TSX (incorrect)`);
+        console.log(`   - Most major TSX stocks should have dividend data`);
+      }
+      
       return [];
     }
   }
@@ -93,8 +192,9 @@ class SmartDividendFrequencyService {
     const lastExDate = moment(sortedDividends[0].exDate);
     
     console.log(`📅 Last ex-date: ${lastExDate.format('YYYY-MM-DD')}`);
+    console.log(`📊 Analyzing ${sortedDividends.length} dividend payments for frequency patterns...`);
     
-    // Apply the frequency detection rules
+    // Apply the frequency detection rules with enhanced logic
     const monthlyCheck = this.checkFrequency(sortedDividends, lastExDate, 35, 2, 'monthly');
     if (monthlyCheck.isMatch) {
       console.log('🎯 Detected MONTHLY frequency');
@@ -132,12 +232,56 @@ class SmartDividendFrequencyService {
       };
     }
     
-    // Default fallback
-    console.log('⚠️ Could not determine frequency, defaulting to quarterly');
+    // Enhanced fallback logic based on data patterns
+    console.log('⚠️ Could not determine clear frequency pattern, applying enhanced fallback logic...');
+    
+    // If we have limited data, make educated guesses based on patterns
+    if (sortedDividends.length >= 2) {
+      const intervals = [];
+      for (let i = 0; i < Math.min(sortedDividends.length - 1, 4); i++) {
+        const days = moment(sortedDividends[i].exDate).diff(moment(sortedDividends[i + 1].exDate), 'days');
+        intervals.push(days);
+      }
+      
+      const avgInterval = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+      console.log(`📊 Average interval between payments: ${Math.round(avgInterval)} days`);
+      
+      let estimatedFrequency = 'quarterly';
+      let confidence = 'low';
+      let reason = `Estimated from ${intervals.length} payment intervals (avg: ${Math.round(avgInterval)} days)`;
+      
+      if (avgInterval < 45) {
+        estimatedFrequency = 'monthly';
+        reason = `Short intervals suggest monthly payments (avg: ${Math.round(avgInterval)} days)`;
+      } else if (avgInterval < 135) {
+        estimatedFrequency = 'quarterly';
+        reason = `Medium intervals suggest quarterly payments (avg: ${Math.round(avgInterval)} days)`;
+      } else if (avgInterval < 225) {
+        estimatedFrequency = 'semi-annual';
+        reason = `Long intervals suggest semi-annual payments (avg: ${Math.round(avgInterval)} days)`;
+      } else {
+        estimatedFrequency = 'annual';
+        reason = `Very long intervals suggest annual payments (avg: ${Math.round(avgInterval)} days)`;
+      }
+      
+      console.log(`🎯 Estimated frequency: ${estimatedFrequency} based on interval analysis`);
+      
+      return {
+        frequency: estimatedFrequency,
+        confidence: confidence,
+        reason: reason,
+        dataPoints: sortedDividends.length,
+        avgInterval: Math.round(avgInterval),
+        intervals: intervals
+      };
+    }
+    
+    // Final fallback
+    console.log('⚠️ Insufficient data for pattern analysis, using default quarterly');
     return {
       frequency: 'quarterly',
       confidence: 'low',
-      reason: 'Could not determine clear pattern',
+      reason: 'Insufficient data for pattern analysis, defaulting to quarterly',
       dataPoints: sortedDividends.length
     };
   }
@@ -184,12 +328,12 @@ class SmartDividendFrequencyService {
       intervals.push(days);
     }
     
-    // Expected intervals for each frequency
+    // Expected intervals for each frequency (with tolerance for market variations)
     const expectedIntervals = {
-      'monthly': { min: 25, max: 35, ideal: 30 },
-      'quarterly': { min: 80, max: 100, ideal: 90 },
-      'semi-annual': { min: 170, max: 200, ideal: 180 },
-      'annual': { min: 350, max: 380, ideal: 365 }
+      'monthly': { min: 25, max: 40, ideal: 30 },
+      'quarterly': { min: 75, max: 105, ideal: 90 },
+      'semi-annual': { min: 165, max: 205, ideal: 182 },
+      'annual': { min: 340, max: 385, ideal: 365 }
     };
     
     const expected = expectedIntervals[frequencyType];
@@ -201,6 +345,10 @@ class SmartDividendFrequencyService {
     );
     
     const consistencyRatio = validIntervals.length / intervals.length;
+    
+    console.log(`📊 Confidence calculation for ${frequencyType}:`);
+    console.log(`   Valid intervals: ${validIntervals.length}/${intervals.length} (${(consistencyRatio * 100).toFixed(1)}%)`);
+    console.log(`   Expected range: ${expected.min}-${expected.max} days (ideal: ${expected.ideal})`);
     
     if (consistencyRatio >= 0.8) return 'high';
     if (consistencyRatio >= 0.6) return 'medium';
@@ -225,6 +373,11 @@ class SmartDividendFrequencyService {
     // If standard deviation is more than 50% of average, consider irregular
     const coefficientOfVariation = stdDev / avgInterval;
     
+    console.log(`📊 Irregularity analysis:`);
+    console.log(`   Average interval: ${Math.round(avgInterval)} days`);
+    console.log(`   Standard deviation: ${Math.round(stdDev)} days`);
+    console.log(`   Coefficient of variation: ${(coefficientOfVariation * 100).toFixed(1)}%`);
+    
     return {
       isIrregular: coefficientOfVariation > 0.5,
       avgInterval: Math.round(avgInterval),
@@ -245,20 +398,46 @@ class SmartDividendFrequencyService {
     }
   }
   
-  // Main method for external use
+  // Main method for external use (Enhanced with multi-exchange support)
   static async analyzeDividendFrequency(ticker, userStartDate = null, userEndDate = null) {
-    console.log(`🚀 Starting dividend frequency analysis for ${ticker}`);
+    const exchangeInfo = this.getExchangeInfo(ticker);
+    console.log(`🚀 Starting dividend frequency analysis for ${ticker} on ${exchangeInfo}`);
     console.log(`📋 User requested period: ${userStartDate} to ${userEndDate}`);
     console.log(`🔍 Will analyze 2+ years of data to determine frequency accurately`);
     
     const result = await this.getDividendFrequency(ticker, userStartDate, userEndDate);
     
-    console.log(`✅ Frequency analysis complete:`, {
+    console.log(`✅ Frequency analysis complete for ${exchangeInfo}:`, {
       ticker,
+      exchange: exchangeInfo,
       frequency: result.frequency,
       confidence: result.confidence,
       dataPoints: result.dataPoints
     });
+    
+    // Add market-specific insights to the result
+    if (result.dataPoints > 0) {
+      console.log(`💡 Market insight for ${exchangeInfo}:`);
+      if (ticker.toUpperCase().endsWith('.IN')) {
+        if (result.frequency === 'annual') {
+          console.log(`   ✅ Annual dividends are common for Indian companies`);
+        } else if (result.frequency === 'quarterly') {
+          console.log(`   📊 Quarterly dividends suggest a well-established Indian company`);
+        }
+      } else if (ticker.toUpperCase().endsWith('.TO')) {
+        if (result.frequency === 'monthly') {
+          console.log(`   🏠 Monthly distributions common for Canadian REITs and income trusts`);
+        } else if (result.frequency === 'quarterly') {
+          console.log(`   🍁 Quarterly dividends typical for major Canadian corporations`);
+        }
+      } else {
+        if (result.frequency === 'quarterly') {
+          console.log(`   🇺🇸 Quarterly dividends typical for established US companies`);
+        } else if (result.frequency === 'monthly') {
+          console.log(`   🏦 Monthly distributions common for US REITs and utilities`);
+        }
+      }
+    }
     
     return result;
   }
